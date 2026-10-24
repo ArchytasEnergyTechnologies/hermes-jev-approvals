@@ -115,6 +115,25 @@ _REQUEST_ID_HEADERS = ("x-typesafe-request-id", "x-generation-id",
                        "request-id", "x-request-id")
 
 
+def _env(name: str, default: Optional[str] = None) -> Optional[str]:
+    """Read from the active profile's secret scope on Hermes versions that support it."""
+    try:
+        from agent.secret_scope import get_secret
+    except ImportError:
+        return os.getenv(name, default)
+    return get_secret(name, default)
+
+
+def _home() -> Path:
+    """Resolve the active Hermes home, with compatibility for older Hermes."""
+    try:
+        from hermes_constants import get_hermes_home
+    except ImportError:
+        configured = (os.environ.get("HERMES_HOME") or "").strip()
+        return Path(os.path.expanduser(configured)) if configured else Path.home() / ".hermes"
+    return Path(get_hermes_home())
+
+
 def _fingerprint(text: str) -> Optional[str]:
     """Short stable SHA-256 for audit correlation; never store trusted policy text."""
     if not text:
@@ -314,7 +333,7 @@ def _api_key(base_url: str = "") -> str:
         if key:
             return key
         env_var = str(_setting("key_env", default_env) or "").strip()
-        key = (os.environ.get(env_var) or "").strip() if env_var else ""
+        key = (_env(env_var) or "").strip() if env_var else ""
         if key:
             return key
         raise RuntimeError(
@@ -324,7 +343,7 @@ def _api_key(base_url: str = "") -> str:
             f"`plugins.entries.{PLUGIN_ID}.settings.key_env`.")
     if host and not _host_matches(host, _TYPESAFE_HOST):
         env_var = str(_setting("key_env", "") or "").strip()
-        key = (os.environ.get(env_var) or "").strip() if env_var else ""
+        key = (_env(env_var) or "").strip() if env_var else ""
         return key
     for resolve in (lambda: _key_from_runtime_provider(PROVIDER_NAME), _key_from_dotenv):
         try:
@@ -333,7 +352,7 @@ def _api_key(base_url: str = "") -> str:
             key = ""
         if key:
             return key
-    key = (os.environ.get(SENTINEL_ENV) or "").strip()
+    key = (_env(SENTINEL_ENV) or "").strip()
     if key:
         return key
     raise RuntimeError(
@@ -849,7 +868,7 @@ class JevClient:
     HERMES_SKIP_ASYNC_WRAP = True
 
     def __init__(self, *, api_key: str = "", base_url: str = "", timeout: float = 30.0, **_: Any):
-        self.api_key = api_key or os.environ.get(SENTINEL_ENV, "")
+        self.api_key = api_key or _env(SENTINEL_ENV, "")
         self.base_url = base_url or DEFAULT_BASE_URL
         self._timeout = timeout
         self.is_closed = False
@@ -979,13 +998,7 @@ def _log_path() -> Path:
     override = (os.environ.get("JEV_APPROVAL_LOG") or "").strip()
     if override:
         return Path(os.path.expanduser(override))
-    try:
-        constants = importlib.import_module("hermes_constants")
-        return Path(constants.get_hermes_home()) / _LOG_NAME
-    except Exception:
-        configured = (os.environ.get("HERMES_HOME") or "").strip()
-        home = Path(os.path.expanduser(configured)) if configured else Path.home() / ".hermes"
-        return home / _LOG_NAME
+    return _home() / _LOG_NAME
 
 
 _UNTRUSTED_CAPS = {"command": 600, "flagged_as": 500, "error": 300}
